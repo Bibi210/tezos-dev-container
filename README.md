@@ -35,15 +35,16 @@ the full 20+ GB base, making daily updates practical.
 
 ### Layer caching (base image)
 
-Tool versions are hardcoded as `ARG`s in early layers (opam, Rust, Node.js,
+Tool versions are hardcoded as `ARG`s in early layers (opam, Node.js,
 Foundry), which change rarely and stay cached across rebuilds. The `git clone`
 layer is what invalidates on rebuild, and a version drift detection step
 re-installs tools only if the repo's `scripts/version.sh` disagrees with what
-was pre-installed.
+was pre-installed. Rust and its cross-compilation targets are installed once,
+using `recommended_rust_version` from the checkout's `scripts/version.sh`.
 
 ```
-Cached (stable)        ARG-pinned tool installs (system packages, opam,
-                       Rust + sccache, Node.js, Foundry)
+Cached (stable)        Tool installs (system packages, opam,
+                       rustup + sccache, Node.js, Foundry)
                        ────────────────────────────────────────────────
 Invalidates on         git clone --depth 1
 rebuild                version drift check (fast if no drift)
@@ -73,7 +74,6 @@ rebuild                version drift check (fast if no drift)
 | Arg | Default | Description |
 |-----|---------|-------------|
 | `OCAML_VERSION` | `5.3.0` | OCaml compiler version |
-| `RUST_VERSION` | `1.88.0` | Rust toolchain version |
 | `NODE_VERSION` | `18.18.2` | Node.js version (via nvm) |
 | `OPAM_VERSION` | `2.3.0` | opam package manager version |
 | `FORGE_VERSION` | `1.5.0` | Foundry forge version |

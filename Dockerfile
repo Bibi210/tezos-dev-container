@@ -15,19 +15,16 @@ RUN cd /root/tezos && \
 # Version drift detection + update
 # ---------------------------------------------------------------------------
 RUN cd /root/tezos && . scripts/version.sh && \
-    # Rust drift
-    current_rust="$(rustc --version | cut -d' ' -f2)" && \
-    if [ "$current_rust" != "$recommended_rust_version" ]; then \
-      echo "Rust drift: $current_rust -> $recommended_rust_version" && \
-      rustup install "$recommended_rust_version" && \
-      rustup default "$recommended_rust_version" && \
-      rustup target add \
-        wasm32-unknown-unknown \
-        riscv64gc-unknown-none-elf \
-        riscv64gc-unknown-linux-gnu \
-        riscv64gc-unknown-linux-musl \
-        x86_64-unknown-linux-musl; \
-    fi && \
+    # Always provision the pinned toolchain and targets: rustc may auto-install
+    # the toolchain from rust-toolchain before a version comparison runs.
+    rustup toolchain install "$recommended_rust_version" && \
+    rustup default "$recommended_rust_version" && \
+    rustup target add --toolchain "$recommended_rust_version" \
+      wasm32-unknown-unknown \
+      riscv64gc-unknown-none-elf \
+      riscv64gc-unknown-linux-gnu \
+      riscv64gc-unknown-linux-musl \
+      x86_64-unknown-linux-musl && \
     # Node drift
     . "$NVM_DIR/nvm.sh" && \
     current_node="$(node --version | sed 's/^v//')" && \
@@ -51,7 +48,7 @@ RUN --mount=type=cache,target=/tmp/cargo-target \
     make -f kernels.mk kernel_sdk && \
     dune build tezt/tests/main.exe && \
     dune build etherlink/tezt/tests/main.exe && \
-    find . -name Cargo.toml -execdir rm -rf target \; 2>/dev/null || true
+    { find . -name Cargo.toml -execdir rm -rf target \; 2>/dev/null || true; }
 
 WORKDIR /root/tezos
 CMD ["/bin/bash"]
