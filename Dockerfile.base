@@ -99,7 +99,14 @@ RUN if [[ ! "${GIT_COMMIT:-}" =~ ^[0-9a-f]{40}$ ]]; then \
 LABEL org.tezos.revision=$GIT_COMMIT
 WORKDIR /root/tezos
 
-FROM source AS development
+# Only dependency inputs cross into this stage. COPY uses their content, so a
+# new source commit with unchanged dependencies reuses toolchain/opam layers.
+FROM toolchain AS dependencies
+WORKDIR /root/tezos
+COPY --from=source /root/tezos/scripts/version.sh /root/tezos/scripts/install_build_deps.sh /root/tezos/scripts/install_build_deps.rust.sh ./scripts/
+COPY --from=source /root/tezos/rust-toolchain ./rust-toolchain
+COPY --from=source /root/tezos/opam/virtual/ ./opam/virtual/
+COPY scripts/install-opam-deps.sh /usr/local/bin/install-opam-deps
 
 # ---------------------------------------------------------------------------
 # Layer 7: Version drift detection + update
@@ -129,26 +136,30 @@ RUN . "$NVM_DIR/nvm.sh" && ln -sf "$(dirname "$(which node)")" "$NVM_DIR/current
 ENV PATH=$NVM_DIR/current:${PATH}
 
 # ---------------------------------------------------------------------------
+# Layer 8-9: OCaml build dependencies (uses BuildKit cache mounts)
+# ---------------------------------------------------------------------------
+RUN --mount=type=cache,target=/root/.opam/download-cache \
+    install-opam-deps
+
+ENV OPAM_SWITCH_PREFIX=/root/tezos/_opam \
+    CAML_LD_LIBRARY_PATH=/root/tezos/_opam/lib/stublibs:/root/tezos/_opam/lib/ocaml/stublibs:/root/tezos/_opam/lib/ocaml \
+    OCAML_TOPLEVEL_PATH=/root/tezos/_opam/lib/toplevel \
+    PATH=/root/tezos/_opam/bin:${PATH}
+
+# Merge the complete checkout only after installing dependencies. Its _opam
+# switch remains at the same absolute path used when it was created.
+FROM dependencies AS development
+COPY --from=source /root/tezos/ /root/tezos/
+ARG GIT_COMMIT
+LABEL org.tezos.revision=$GIT_COMMIT
+
+# ---------------------------------------------------------------------------
 # Shared Rust target dir: deduplicates deps across the three Rust sub-builds.
 # Mounted as a BuildKit cache so intermediates stay out of the image.
 # ---------------------------------------------------------------------------
 ENV OCTEZ_RUST_DEPS_TARGET_DIR=/tmp/cargo-target \
     OCTEZ_RUSTZCASH_DEPS_TARGET_DIR=/tmp/cargo-target \
     OCTEZ_ETHERLINK_WASM_RUNTIME_TARGET_DIR=/tmp/cargo-target
-
-# ---------------------------------------------------------------------------
-# Layer 8-9: OCaml build dependencies (uses BuildKit cache mounts)
-# ---------------------------------------------------------------------------
-RUN --mount=type=cache,target=/root/.opam/download-cache \
-    make build-deps && \
-    eval $(opam env) && \
-    make build-dev-deps && \
-    rm -rf _opam/.opam-switch/build _opam/.opam-switch/sources
-
-ENV OPAM_SWITCH_PREFIX=/root/tezos/_opam \
-    CAML_LD_LIBRARY_PATH=/root/tezos/_opam/lib/stublibs:/root/tezos/_opam/lib/ocaml/stublibs:/root/tezos/_opam/lib/ocaml \
-    OCAML_TOPLEVEL_PATH=/root/tezos/_opam/lib/toplevel \
-    PATH=/root/tezos/_opam/bin:${PATH}
 
 # ---------------------------------------------------------------------------
 # Layer 10: Kernel dependencies

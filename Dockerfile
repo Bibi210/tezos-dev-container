@@ -44,6 +44,14 @@ RUN cd /root/tezos && . scripts/version.sh && \
 # Update Node.js symlink in case of version drift
 RUN . "$NVM_DIR/nvm.sh" && ln -sf "$(dirname "$(which node)")" "$NVM_DIR/current"
 
+# Reconcile the switch when upstream changes its dependency inputs. The base
+# records their fingerprint, so ordinary source-only updates skip opam entirely.
+COPY scripts/install-opam-deps.sh /usr/local/bin/install-opam-deps
+RUN --mount=type=cache,target=/root/.opam/download-cache \
+    install-opam-deps && \
+    make -f kernels.mk build-deps && \
+    make -f etherlink.mk build-deps
+
 # ---------------------------------------------------------------------------
 # Incremental rebuild
 # Dune only recompiles what changed since the base image's build.

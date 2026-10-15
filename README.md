@@ -1,9 +1,8 @@
 # tezos-dev
 
 Self-contained Docker images for [tezos/tezos](https://gitlab.com/tezos/tezos)
-development. A two-image strategy keeps nightly pulls fast: a heavy **base
-image** (rebuilt weekly) and a thin **nightly image** that only adds an
-incremental `dune` rebuild on top.
+development. The **base image** is rebuilt weekly. The **nightly image** updates
+the checkout and dependencies, then rebuilds incrementally on top of the base.
 
 ## Quick start
 
@@ -11,11 +10,11 @@ incremental `dune` rebuild on top.
 # Resolve master once so both images build the same Tezos revision.
 TEZOS_COMMIT=$(./scripts/resolve-tezos-commit.sh master)
 
-# Build the base image (weekly, ~45 min)
+# Build the base image (weekly)
 docker build -f Dockerfile.base --build-arg GIT_COMMIT="$TEZOS_COMMIT" \
   -t ghcr.io/lthms/tezos-dev-base:latest .
 
-# Build the nightly image on top of it (~15 min)
+# Build the nightly image on top of it
 docker build --build-arg GIT_COMMIT="$TEZOS_COMMIT" -t tezos-dev-nightly .
 
 # Build for a specific branch
@@ -30,13 +29,14 @@ docker run -it tezos-dev-nightly
 
 ### Two-image strategy
 
-| Image | Rebuild frequency | Size | Purpose |
-|-------|-------------------|------|---------|
-| `Dockerfile.base` | Weekly | ~20 GB | Full toolchain + compiled `_build` tree |
-| `Dockerfile` | Nightly | ~4 GB layer on top of base | `git fetch` + incremental `dune` rebuild |
+| Image | Rebuild frequency | Purpose |
+|-------|-------------------|---------|
+| `Dockerfile.base` | Weekly | Full toolchain + compiled `_build` tree |
+| `Dockerfile` | Nightly | Exact checkout + dependency reconciliation + incremental rebuild |
 
-Subsequent nightly Docker pulls only download the ~4 GB diff layer instead of
-the full 20+ GB base, making daily updates practical.
+Nightly images share the base image's layers. Pulling an updated nightly image
+only downloads layers not already present locally; the size depends on what
+changed and which build artifacts were reused.
 
 ### Layer caching (base image)
 
@@ -51,35 +51,43 @@ Both Dockerfiles require `GIT_COMMIT`, fetch that exact commit, verify `HEAD`,
 and record it in the `org.tezos.revision` image label. The same argument can be
 used to rebuild an older revision without resolving a branch again.
 
-A version drift detection step
-re-installs tools only if the repo's `scripts/version.sh` disagrees with what
-was pre-installed. Rust and its cross-compilation targets are installed once,
-using `recommended_rust_version` from the checkout's `scripts/version.sh`.
+A separate `dependencies` stage copies only `scripts/version.sh`, the upstream
+opam installer scripts, `rust-toolchain`, and `opam/virtual/` from the checkout.
+It provisions Rust and Node.js, then runs upstream's dependency installer with
+`--dev` to install both build and development dependencies. The full source tree
+is copied in afterwards. A new Tezos revision therefore reuses these layers
+when the dependency inputs are unchanged.
+
+Nightly builds compare those inputs with the fingerprint recorded in the base's
+opam switch. They skip opam for source-only changes and run the upstream installer
+when dependencies change. A failed install does not update the fingerprint.
+Kernel toolchain setup is also rerun against the nightly checkout. The installer
+uses upstream's OCaml version, pinned opam repository, and dependency manifests;
+its opam depext step installs required system packages.
 
 ```
-Cached (stable)        Tool installs (system packages, opam,
-                       rustup + sccache, Node.js, Foundry)
-                       ────────────────────────────────────────────────
-New Tezos commit       git fetch --depth 1 <commit> + checkout
-                       version drift check (fast if no drift)
-                       make build-deps / build-dev-deps
-                       make -f kernels.mk / etherlink.mk build-deps
+Stable tool arguments  System packages, opam, rustup + sccache, Node.js, Foundry
+Dependency inputs      Rust/Node version setup + opam build/dev dependencies
+New Tezos commit       Full checkout + kernel toolchain setup
                        make (slim mode) + tezt builds
 ```
 
 ### Size optimizations
 
-- **Slim mode** (`scripts/slim-mode.sh on`): drops old protocols (~30% faster
-  builds, fewer binaries)
-- **BuildKit cache mounts**: sccache and cargo target dirs live in BuildKit
-  caches, not in the image
+- **Slim mode** (`scripts/slim-mode.sh on`): excludes old protocols from the
+  default build
+- **BuildKit cache mounts**: the shared Cargo target directory and opam download
+  cache stay in the builder. Their contents are not included in the images or
+  exported by the workflows' GHA layer cache.
+- **sccache**: its local cache is retained in the image, alongside the compiled
+  Dune `_build` tree. Cargo target directories are removed from the image.
 - **Shared Rust target dir**: `OCTEZ_RUST_DEPS_TARGET_DIR`,
   `OCTEZ_RUSTZCASH_DEPS_TARGET_DIR`, and
   `OCTEZ_ETHERLINK_WASM_RUNTIME_TARGET_DIR` all point to the same directory,
-  deduplicating Rust dependencies across the three sub-builds
-- **Cleanup in same RUN steps**: opam build/sources dirs, nvm cache, and root
-  binaries are removed in the same `RUN` step that creates them, so they never
-  appear in Docker layers
+  allowing compatible artifacts to be shared, but serializing those Cargo builds
+- **Cleanup in the base image**: opam build/sources dirs, nvm cache, and generated
+  root binaries are removed in the same `RUN` step that creates them, so they
+  never appear in its Docker layers
 
 ## Build args
 
@@ -87,7 +95,6 @@ New Tezos commit       git fetch --depth 1 <commit> + checkout
 
 | Arg | Default | Description |
 |-----|---------|-------------|
-| `OCAML_VERSION` | `5.3.0` | OCaml compiler version |
 | `NODE_VERSION` | `18.18.2` | Node.js version (via nvm) |
 | `OPAM_VERSION` | `2.3.0` | opam package manager version |
 | `FORGE_VERSION` | `1.5.0` | Foundry forge version |
@@ -101,11 +108,16 @@ New Tezos commit       git fetch --depth 1 <commit> + checkout
 | `BASE_TAG` | `latest` | Tag of the base image to build on |
 | `GIT_COMMIT` | Required | Full Tezos commit SHA to fetch and check out |
 
-## Checkout validation
+## Validation
 
 `python3 -m unittest discover -s tests` checks branch resolution and both
 Dockerfiles' checkout commands against a temporary local Git repository. It
 includes an advancing branch and a branch moving after its SHA was resolved.
+It also tests dependency fingerprint invalidation, failed-install retries, and
+reuse across source-only edits. These tests do not compile Tezos.
+
+`docker build -f Dockerfile.base --target dependencies --build-arg
+GIT_COMMIT=... .` can check dependency installation separately from compilation.
 
 Both Dockerfiles expose a `source` stage for checking the actual Docker checkout
 and revision label without compiling Tezos. For example:
