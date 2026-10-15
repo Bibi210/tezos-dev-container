@@ -69,8 +69,12 @@ its opam depext step installs required system packages.
 Stable tool arguments  System packages, opam, rustup + sccache, Node.js, Foundry
 Dependency inputs      Rust/Node version setup + opam build/dev dependencies
 New Tezos commit       Full checkout + kernel toolchain setup
-                       make (slim mode) + tezt builds
+                       EVM kernel + SDK, then executables + Tezt (slim mode)
 ```
+
+Both images generate the EVM kernel and SDK before building the executables.
+The two Tezt runners are included in that same Dune invocation through
+`BUILD_EXTRA`, so Dune sees the generated inputs from the start.
 
 ### Size optimizations
 

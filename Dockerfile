@@ -56,14 +56,13 @@ RUN --mount=type=cache,target=/root/.opam/download-cache \
 # Incremental rebuild
 # Dune only recompiles what changed since the base image's build.
 # Docker layer = filesystem diff, so only modified files in _build/ are stored.
+# The EVM kernel target includes the SDK; generate these inputs before building
+# the executables and both Tezt runners in a single Dune invocation.
 # ---------------------------------------------------------------------------
 RUN --mount=type=cache,target=/tmp/cargo-target \
     cd /root/tezos && \
-    make && \
     make -f etherlink.mk evm_kernel.wasm && \
-    make -f kernels.mk kernel_sdk && \
-    dune build tezt/tests/main.exe && \
-    dune build etherlink/tezt/tests/main.exe && \
+    make BUILD_EXTRA='tezt/tests/main.exe etherlink/tezt/tests/main.exe' && \
     { find . -name Cargo.toml -execdir rm -rf target \; 2>/dev/null || true; }
 
 WORKDIR /root/tezos

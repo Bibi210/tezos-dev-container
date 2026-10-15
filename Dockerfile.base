@@ -172,14 +172,13 @@ RUN make -f kernels.mk build-deps && \
 # Slim mode drops old protocols (~30% faster build, fewer binaries).
 # Cache mounts for Rust: sccache local cache + shared cargo target dir.
 # Intermediates live in the cache, only final .a/.so files end up in _build.
+# The EVM kernel target also builds the SDK. Generate both before Dune snapshots
+# their source trees, then include both Tezt runners in the same Dune build.
 # ---------------------------------------------------------------------------
 RUN --mount=type=cache,target=/tmp/cargo-target \
     scripts/slim-mode.sh on && \
-    make && \
     make -f etherlink.mk evm_kernel.wasm && \
-    make -f kernels.mk kernel_sdk && \
-    dune build tezt/tests/main.exe && \
-    dune build etherlink/tezt/tests/main.exe && \
+    make BUILD_EXTRA='tezt/tests/main.exe etherlink/tezt/tests/main.exe' && \
     rm -f octez-* etherlink-* fa-bridge-* && \
     { find . -name Cargo.toml -execdir rm -rf target \; 2>/dev/null || true; }
 
