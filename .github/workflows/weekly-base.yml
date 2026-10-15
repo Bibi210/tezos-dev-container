@@ -33,6 +33,15 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Resolve Tezos commit
+        id: source
+        env:
+          TEZOS_BRANCH: ${{ inputs.git_branch || 'master' }}
+        run: |
+          commit=$(./scripts/resolve-tezos-commit.sh "$TEZOS_BRANCH")
+          echo "commit=$commit" >> "$GITHUB_OUTPUT"
+          echo "Tezos $TEZOS_BRANCH: $commit"
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -61,7 +70,7 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
-            GIT_BRANCH=${{ inputs.git_branch || 'master' }}
+            GIT_COMMIT=${{ steps.source.outputs.commit }}
           cache-from: type=gha,scope=base
           cache-to: type=gha,mode=max,scope=base
 

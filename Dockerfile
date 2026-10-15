@@ -1,15 +1,23 @@
 ARG BASE_TAG=latest
-FROM ghcr.io/lthms/tezos-dev-base:${BASE_TAG}
+FROM ghcr.io/lthms/tezos-dev-base:${BASE_TAG} AS source
 SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
 
-ARG GIT_BRANCH=master
+ARG GIT_COMMIT
 
 # ---------------------------------------------------------------------------
 # Update the repository
 # ---------------------------------------------------------------------------
-RUN cd /root/tezos && \
-    git fetch origin "$GIT_BRANCH" && \
-    git checkout FETCH_HEAD
+RUN if [[ ! "${GIT_COMMIT:-}" =~ ^[0-9a-f]{40}$ ]]; then \
+      echo 'GIT_COMMIT must be a full commit SHA; use scripts/resolve-tezos-commit.sh' >&2; \
+      exit 1; \
+    fi && \
+    cd /root/tezos && \
+    git fetch --depth 1 origin "$GIT_COMMIT" && \
+    git checkout --detach FETCH_HEAD && \
+    test "$(git rev-parse HEAD)" = "$GIT_COMMIT"
+LABEL org.tezos.revision=$GIT_COMMIT
+
+FROM source AS development
 
 # ---------------------------------------------------------------------------
 # Version drift detection + update
