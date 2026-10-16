@@ -5,7 +5,6 @@ SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
 # Build args: hardcode current versions for layer caching.
 # These rarely change; when they do, only the affected layer rebuilds.
 # ---------------------------------------------------------------------------
-ARG OCAML_VERSION=5.3.0
 ARG NODE_VERSION=18.18.2
 ARG OPAM_VERSION=2.3.0
 ARG FORGE_VERSION=1.5.0
@@ -148,18 +147,19 @@ ENV OPAM_SWITCH_PREFIX=/root/tezos/_opam \
 
 # Merge the complete checkout only after installing dependencies. Its _opam
 # switch remains at the same absolute path used when it was created.
-FROM dependencies AS development
+FROM dependencies AS prepared
 COPY --from=source /root/tezos/ /root/tezos/
 ARG GIT_COMMIT
 LABEL org.tezos.revision=$GIT_COMMIT
 
 # ---------------------------------------------------------------------------
 # Shared Rust target dir: deduplicates deps across the three Rust sub-builds.
-# Mounted as a BuildKit cache so intermediates stay out of the image.
+# Retained in separate image layers and reused by BuildKit cache mounts.
 # ---------------------------------------------------------------------------
 ENV OCTEZ_RUST_DEPS_TARGET_DIR=/tmp/cargo-target \
     OCTEZ_RUSTZCASH_DEPS_TARGET_DIR=/tmp/cargo-target \
-    OCTEZ_ETHERLINK_WASM_RUNTIME_TARGET_DIR=/tmp/cargo-target
+    OCTEZ_ETHERLINK_WASM_RUNTIME_TARGET_DIR=/tmp/cargo-target \
+    OCTEZ_ROLLUP_NODE_RUST_DEPS_TARGET_DIR=/tmp/cargo-rollup
 
 # ---------------------------------------------------------------------------
 # Layer 10: Kernel dependencies
@@ -167,25 +167,29 @@ ENV OCTEZ_RUST_DEPS_TARGET_DIR=/tmp/cargo-target \
 RUN make -f kernels.mk build-deps && \
     make -f etherlink.mk build-deps
 
-# ---------------------------------------------------------------------------
-# Layer 11: Build everything
-# Slim mode drops old protocols (~30% faster build, fewer binaries).
-# Cache mounts for Rust: sccache local cache + shared cargo target dir.
-# Intermediates live in the cache, only final .a/.so files end up in _build.
-# The EVM kernel target also builds the SDK. Generate both before Dune snapshots
-# their source trees, then include both Tezt runners in the same Dune build.
-# ---------------------------------------------------------------------------
-RUN --mount=type=cache,target=/tmp/cargo-target \
-    scripts/slim-mode.sh on && \
-    make -f etherlink.mk evm_kernel.wasm && \
-    make BUILD_EXTRA='tezt/tests/main.exe etherlink/tezt/tests/main.exe' && \
-    rm -f octez-* etherlink-* fa-bridge-* && \
-    { find . -name Cargo.toml -execdir rm -rf target \; 2>/dev/null || true; }
-
-# ---------------------------------------------------------------------------
-# Layer 12: Environment setup
-# ---------------------------------------------------------------------------
 RUN echo '[ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"' >> /root/.bashrc
+
+# The compile stage commits cache snapshots alongside its build outputs. Final
+# layers import each artifact group separately, including on a fresh builder.
+FROM prepared AS build
+COPY scripts/build-tezos.sh /usr/local/bin/build-tezos
+RUN --mount=type=cache,target=/tmp/cargo-target \
+    --mount=type=cache,target=/tmp/cargo-rollup \
+    --mount=type=bind,from=prepared,source=/tmp,target=/tmp/base-cache \
+    build-tezos base
+
+FROM prepared AS development
+# Keep tools downloaded by the build (for example solc) as well as shell setup.
+RUN --mount=type=bind,from=build,source=/root,target=/mnt/build-root \
+    rsync -aH --checksum --delete --exclude=/tezos /mnt/build-root/ /root/
+RUN --mount=type=bind,from=build,source=/root/tezos,target=/mnt/build-tezos \
+    rsync -aH --checksum --delete --exclude=/_opam /mnt/build-tezos/ /root/tezos/
+RUN --mount=type=bind,from=build,source=/opt/cargo-export/cargo-target,target=/mnt/build-native \
+    mkdir -p /tmp/cargo-target && \
+    rsync -aH --checksum --delete /mnt/build-native/ /tmp/cargo-target/
+RUN --mount=type=bind,from=build,source=/opt/cargo-export/cargo-rollup,target=/mnt/build-rollup \
+    mkdir -p /tmp/cargo-rollup && \
+    rsync -aH --checksum --delete /mnt/build-rollup/ /tmp/cargo-rollup/
 
 WORKDIR /root/tezos
 CMD ["/bin/bash"]

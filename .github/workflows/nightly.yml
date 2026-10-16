@@ -77,8 +77,6 @@ jobs:
           build-args: |
             BASE_TAG=${{ inputs.base_tag || 'latest' }}
             GIT_COMMIT=${{ steps.source.outputs.commit }}
-          cache-from: type=gha,scope=nightly
-          cache-to: type=gha,mode=max,scope=nightly
 
       - name: Delete old images
         uses: dataaxiom/ghcr-cleanup-action@v1

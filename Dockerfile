@@ -17,7 +17,7 @@ RUN if [[ ! "${GIT_COMMIT:-}" =~ ^[0-9a-f]{40}$ ]]; then \
     test "$(git rev-parse HEAD)" = "$GIT_COMMIT"
 LABEL org.tezos.revision=$GIT_COMMIT
 
-FROM source AS development
+FROM source AS prepared
 
 # ---------------------------------------------------------------------------
 # Version drift detection + update
@@ -52,18 +52,27 @@ RUN --mount=type=cache,target=/root/.opam/download-cache \
     make -f kernels.mk build-deps && \
     make -f etherlink.mk build-deps
 
-# ---------------------------------------------------------------------------
-# Incremental rebuild
-# Dune only recompiles what changed since the base image's build.
-# Docker layer = filesystem diff, so only modified files in _build/ are stored.
-# The EVM kernel target includes the SDK; generate these inputs before building
-# the executables and both Tezt runners in a single Dune invocation.
-# ---------------------------------------------------------------------------
+# The compile stage commits cache snapshots alongside its build outputs. Final
+# layers import each artifact group separately, including on a fresh builder.
+FROM prepared AS build
+COPY scripts/build-tezos.sh /usr/local/bin/build-tezos
 RUN --mount=type=cache,target=/tmp/cargo-target \
-    cd /root/tezos && \
-    make -f etherlink.mk evm_kernel.wasm && \
-    make BUILD_EXTRA='tezt/tests/main.exe etherlink/tezt/tests/main.exe' && \
-    { find . -name Cargo.toml -execdir rm -rf target \; 2>/dev/null || true; }
+    --mount=type=cache,target=/tmp/cargo-rollup \
+    --mount=type=bind,from=prepared,source=/tmp,target=/tmp/base-cache \
+    build-tezos nightly
+
+FROM prepared AS development
+# Keep tools downloaded by the build (for example solc) as well as shell setup.
+RUN --mount=type=bind,from=build,source=/root,target=/mnt/build-root \
+    rsync -aH --checksum --delete --exclude=/tezos /mnt/build-root/ /root/
+RUN --mount=type=bind,from=build,source=/root/tezos,target=/mnt/build-tezos \
+    rsync -aH --checksum --delete --exclude=/_opam /mnt/build-tezos/ /root/tezos/
+RUN --mount=type=bind,from=build,source=/opt/cargo-export/cargo-target,target=/mnt/build-native \
+    mkdir -p /tmp/cargo-target && \
+    rsync -aH --checksum --delete /mnt/build-native/ /tmp/cargo-target/
+RUN --mount=type=bind,from=build,source=/opt/cargo-export/cargo-rollup,target=/mnt/build-rollup \
+    mkdir -p /tmp/cargo-rollup && \
+    rsync -aH --checksum --delete /mnt/build-rollup/ /tmp/cargo-rollup/
 
 WORKDIR /root/tezos
 CMD ["/bin/bash"]

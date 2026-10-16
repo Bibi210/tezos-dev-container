@@ -76,22 +76,41 @@ Both images generate the EVM kernel and SDK before building the executables.
 The two Tezt runners are included in that same Dune invocation through
 `BUILD_EXTRA`, so Dune sees the generated inputs from the start.
 
-### Size optimizations
+### Build artifacts and image layers
 
-- **Slim mode** (`scripts/slim-mode.sh on`): excludes old protocols from the
-  default build
-- **BuildKit cache mounts**: the shared Cargo target directory and opam download
-  cache stay in the builder. Their contents are not included in the images or
-  exported by the workflows' GHA layer cache.
-- **sccache**: its local cache is retained in the image, alongside the compiled
-  Dune `_build` tree. Cargo target directories are removed from the image.
-- **Shared Rust target dir**: `OCTEZ_RUST_DEPS_TARGET_DIR`,
-  `OCTEZ_RUSTZCASH_DEPS_TARGET_DIR`, and
-  `OCTEZ_ETHERLINK_WASM_RUNTIME_TARGET_DIR` all point to the same directory,
-  allowing compatible artifacts to be shared, but serializing those Cargo builds
-- **Cleanup in the base image**: opam build/sources dirs, nvm cache, and generated
-  root binaries are removed in the same `RUN` step that creates them, so they
-  never appear in its Docker layers
+The images retain the compiled Dune `_build` tree, Cargo downloads, sccache,
+and two native Cargo target directories:
+
+| Directory | Used by |
+|-----------|---------|
+| `/tmp/cargo-target` | Rust dependencies, rustzcash, and the EVM WASM runtime |
+| `/tmp/cargo-rollup` | Rollup node Rust dependencies |
+
+The corresponding `OCTEZ_*_TARGET_DIR` environment variables keep these artifacts
+outside Dune's temporary build directories. Compatible native dependencies share
+one target directory; Cargo serializes builds using that directory. The rollup
+node uses its own target directory.
+
+BuildKit mounts reuse these directories between local builds. On a fresh builder,
+the nightly build seeds empty mounts from the base image. Compilation snapshots
+the cache contents into ordinary build-stage outputs, so restoring a cached build
+step also restores the artifacts needed to assemble the image. The weekly
+workflow exports only final image layers to the Actions cache. Nightly builds
+reuse the artifacts in the base image; they do not export an additional Actions
+cache, since a new checkout invalidates their build layers.
+
+The compiled checkout and each native target directory have separate layers.
+Cargo downloads, sccache, and other build-installed tools share another layer.
+Nightly imports compare file contents with the base image to preserve unchanged
+files. Small executable launchers in the checkout root run the compiled originals
+without duplicating them. A subsequent `make` can replace these launchers with
+its usual binary copies.
+
+Slim mode excludes old protocols from the default build. Temporary kernel/SDK
+Cargo directories are removed before Dune reads their source trees; those target
+directories are not retained. Other in-tree Cargo targets, including libcrux,
+are discarded after compilation. Opam build/source directories and the nvm
+download cache are also removed during dependency installation.
 
 ## Build args
 

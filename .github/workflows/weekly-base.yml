@@ -72,7 +72,8 @@ jobs:
           build-args: |
             GIT_COMMIT=${{ steps.source.outputs.commit }}
           cache-from: type=gha,scope=base
-          cache-to: type=gha,mode=max,scope=base
+          # The compile stage duplicates artifacts split across the final layers.
+          cache-to: type=gha,mode=min,scope=base
 
       - name: Delete old images
         uses: dataaxiom/ghcr-cleanup-action@v1
