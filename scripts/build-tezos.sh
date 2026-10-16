@@ -1,33 +1,40 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# A fresh builder has empty cache mounts even when it pulled a compiled base.
-# Import the base image's artifacts before building at the same absolute paths.
-for cache in cargo-target cargo-rollup; do
-  if [ -d "/tmp/base-cache/$cache" ] &&
-     [ -z "$(find "/tmp/$cache" -mindepth 1 -print -quit)" ]; then
-    cp -a "/tmp/base-cache/$cache/." "/tmp/$cache/"
+cargo_root=/root/tezos/_build/.cargo-target/default
+components=(rust-deps rustzcash evm-runtime rollup-node libcrux riscv-kernels kernel-sdk evm-kernel cargo-git cargo-registry)
+cache_dirs=(
+  "$cargo_root/rust-deps"
+  "$cargo_root/rustzcash"
+  "$cargo_root/evm-runtime"
+  "$cargo_root/rollup-node"
+  "$cargo_root/libcrux"
+  "$cargo_root/riscv-kernels"
+  /root/tezos/src/kernel_sdk/target
+  /root/tezos/etherlink/kernel_latest/target
+  /root/.cargo/git
+  /root/.cargo/registry
+)
+
+# A fresh builder seeds empty mounts from the compiled base, at the same paths
+# used by Dune and Make. Keep each cache independent for image assembly.
+for index in "${!components[@]}"; do
+  cache=${cache_dirs[$index]}
+  case "$cache" in
+    /root/tezos/*) seed="/mnt/base-tezos/${cache#/root/tezos/}" ;;
+    /root/.cargo/*) seed="/mnt/base-cargo/${cache#/root/.cargo/}" ;;
+  esac
+  mkdir -p "$cache"
+  if [ -d "$seed" ] && [ -z "$(find "$cache" -mindepth 1 -print -quit)" ]; then
+    cp -a "$seed/." "$cache/"
   fi
 done
-
-# Enumerate first: deleting a sibling target while find is traversing its parent
-# can otherwise produce ENOENT before find reaches the prune expression.
-remove_source_targets() {
-  local targets_file
-  targets_file=$(mktemp)
-  find "$@" -name target -prune -o -name Cargo.toml -printf '%h/target\0' > "$targets_file"
-  xargs -0 -r rm -rf -- < "$targets_file"
-  rm -f "$targets_file"
-}
 
 cd /root/tezos
 if [ "${1:-}" = base ]; then
   scripts/slim-mode.sh on
 fi
 make -f etherlink.mk evm_kernel.wasm
-# Dune's source_tree dependencies include ignored files. These Cargo outputs
-# are disposable, and must not become inputs to the native Rust builds.
-remove_source_targets src etherlink
 make BUILD_EXTRA='tezt/tests/main.exe etherlink/tezt/tests/main.exe'
 
 # Make copies installed executables into the checkout. Small launchers retain
@@ -42,9 +49,12 @@ for binary in _build/install/default/bin/*; do
     chmod +x "$name"
   fi
 done
-remove_source_targets .
 
 # Commit snapshots in this same RUN: a restored build layer must contain its
 # artifacts even when the builder's mutable cache mounts have not been restored.
 mkdir -p /opt/cargo-export
-cp -a /tmp/cargo-target /tmp/cargo-rollup /opt/cargo-export/
+for index in "${!components[@]}"; do
+  destination="/opt/cargo-export/${components[$index]}"
+  mkdir -p "$destination"
+  cp -a "${cache_dirs[$index]}/." "$destination/"
+done
