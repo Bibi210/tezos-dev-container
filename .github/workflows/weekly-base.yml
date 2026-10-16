@@ -71,14 +71,15 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             GIT_COMMIT=${{ steps.source.outputs.commit }}
-          cache-from: type=gha,scope=base
+          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache
           # The compile stage duplicates artifacts split across the final layers.
-          cache-to: type=gha,mode=min,scope=base
+          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache,mode=min,image-manifest=true,oci-mediatypes=true
 
       - name: Delete old images
         uses: dataaxiom/ghcr-cleanup-action@v1
         with:
           package: tezos-dev-base
+          exclude-tags: buildcache
           delete-untagged: true
           keep-n-tagged: 2
           token: ${{ secrets.GITHUB_TOKEN }}

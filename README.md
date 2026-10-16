@@ -104,9 +104,11 @@ BuildKit mounts reuse these directories between local builds. On a fresh builder
 the nightly build seeds empty mounts from the base image. Compilation snapshots
 the cache contents into ordinary build-stage outputs, so restoring a cached build
 step also restores the artifacts needed to assemble the image. The weekly
-workflow exports only final image layers to the Actions cache. Nightly builds
-reuse the artifacts in the base image; they do not export an additional Actions
-cache, since a new checkout invalidates their build layers.
+workflow exports only final image layers to the GHCR registry cache at
+`ghcr.io/<owner>/tezos-dev-base:buildcache` (`mode=min`). Image cleanup preserves
+this tag. Nightly builds reuse the artifacts in the base image; they do not
+export an additional registry cache, since a new checkout invalidates their build
+layers.
 
 The compiled checkout and each component target directory have separate layers.
 Cargo Git checkouts and registry sources each have a persistent cache mount and
