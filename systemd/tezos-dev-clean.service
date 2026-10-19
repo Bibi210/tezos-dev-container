@@ -1,0 +1,9 @@
+[Unit]
+Description=Remove superseded Tezos development images
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/tezos-dev-images clean
+TimeoutStartSec=3h

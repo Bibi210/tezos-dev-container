@@ -1,0 +1,12 @@
+[Unit]
+Description=Download the latest Tezos development image
+Wants=network-online.target
+Requires=docker.service
+After=network-online.target docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/tezos-dev-images pull
+TimeoutStartSec=2h
+Restart=on-failure
+RestartSec=15min

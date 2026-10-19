@@ -25,6 +25,51 @@ docker build --build-arg GIT_COMMIT="$TEZOS_COMMIT" -t tezos-dev-nightly .
 docker run -it tezos-dev-nightly
 ```
 
+## Automatic local image updates
+
+On a Linux host with systemd and a system-wide Docker daemon, install the
+downloader and cleanup timers with:
+
+```bash
+sudo make install
+```
+
+This installs and enables two independent timers:
+
+- `tezos-dev-pull.timer` downloads
+  `ghcr.io/lthms/tezos-dev-container:latest` at **06:00 local time**. Missed runs
+  are caught up after boot or resume; failed downloads retry every 15 minutes.
+- `tezos-dev-clean.timer` runs **hourly**, removing images from the
+  `ghcr.io/lthms/tezos-dev-container` repository other than the local `latest`.
+  Images still used by containers or protected by additional tags are retained
+  and retried on later runs. The current local `latest` image is
+  always retained, including after a failed download.
+
+Neither timer wakes the laptop. Both services run as root and share an ephemeral
+lock under `/run/lock`. Cleanup discovers images directly from Docker, including
+untagged pulls identified by their repository digests; it stores no image history.
+Images from other repositories, including the base image, are left alone.
+If you installed the earlier combined `tezos-dev-image.timer`, disable it with
+`sudo systemctl disable --now tezos-dev-image.timer` before installing these units.
+
+```bash
+# Run a download now, or inspect the schedule and logs.
+sudo systemctl start tezos-dev-pull.service
+systemctl list-timers 'tezos-dev-*'
+journalctl -u tezos-dev-pull.service -u tezos-dev-clean.service
+```
+
+To stop the services and remove the installed helper and units:
+
+```bash
+sudo make uninstall
+```
+
+Downloaded images and containers are retained.
+
+For packaging, both targets accept `DESTDIR=/path/to/staging` to install or remove
+files without contacting systemd.
+
 ## Design
 
 ### Two-image strategy

@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+case "${1:-}" in
+  pull|clean) ;;
+  *) echo "Usage: $0 pull|clean" >&2; exit 2 ;;
+esac
+
+repository=ghcr.io/lthms/tezos-dev-container
+image="$repository:latest"
+
+# Serialize the two services using an ephemeral lock, with no image history.
+exec 9>"${TEZOS_DEV_IMAGES_LOCK:-/run/lock/tezos-dev-images.lock}"
+flock 9
+
+if [[ "$1" == pull ]]; then
+  docker pull "$image"
+  exit 0
+fi
+
+# Protect the current tag, not the newest creation timestamp.
+current=$(docker image inspect --format '{{.Id}}' "$image" 2>/dev/null) || exit 0
+# --digests exposes the repository of pulled images even after they lose a tag.
+images=$(docker image ls --all --digests --no-trunc --format '{{.ID}} {{.Repository}}' | sort -u)
+while read -r id origin; do
+  [[ "$origin" == "$repository" && "$id" != "$current" ]] || continue
+  # No --force: images still in use remain discoverable on the next hourly run.
+  docker image rm "$id" || echo "Retaining $id; cleanup will retry next hour." >&2
+done <<< "$images"
