@@ -9,4 +9,4 @@ Type=oneshot
 ExecStart=/usr/local/sbin/tezos-dev-images pull
 TimeoutStartSec=2h
 Restart=on-failure
-RestartSec=15min
+RestartSec=1min

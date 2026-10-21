@@ -38,7 +38,7 @@ This installs and enables two independent timers:
 
 - `tezos-dev-pull.timer` downloads
   `ghcr.io/lthms/tezos-dev-container:latest` at **06:00 local time**. Missed runs
-  are caught up after boot or resume; failed downloads retry every 15 minutes.
+  are caught up after boot or resume; failed downloads retry every minute.
 - `tezos-dev-clean.timer` runs **hourly**, removing images from the
   `ghcr.io/lthms/tezos-dev-container` repository other than the local `latest`.
   Images still used by containers or protected by additional tags are retained
