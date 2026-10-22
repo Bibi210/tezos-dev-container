@@ -25,6 +25,20 @@ docker build --build-arg GIT_COMMIT="$TEZOS_COMMIT" -t tezos-dev-nightly .
 docker run -it tezos-dev-nightly
 ```
 
+## Development tools
+
+The base image includes Python 3, pip, venv support, pre-commit, ShellCheck,
+shfmt, jsonnet, jsonnetfmt, jsonnet-lint, and hadolint; nightly images inherit
+them. Run the lint binaries directly when upstream hooks require Docker.
+The Jsonnet tools use the same pinned [go-jsonnet release](https://github.com/google/go-jsonnet).
+For additional Python dependencies, create a virtual environment:
+
+```bash
+python3 -m venv .venv
+. .venv/bin/activate
+python -m pip install -r docs/requirements.txt
+```
+
 ## Automatic local image updates
 
 On a Linux host with systemd and a system-wide Docker daemon, install the
@@ -180,6 +194,8 @@ dependency installation.
 | `NODE_VERSION` | `18.18.2` | Node.js version (via nvm) |
 | `OPAM_VERSION` | `2.3.0` | opam package manager version |
 | `FORGE_VERSION` | `1.5.0` | Foundry forge version |
+| `JSONNET_VERSION` | `0.20.0` | Version of all three go-jsonnet tools |
+| `HADOLINT_VERSION` | `2.12.0` | hadolint binary version |
 | `SCCACHE_VERSION` | `0.10.0` | sccache version |
 | `GIT_COMMIT` | Required | Full Tezos commit SHA; resolve a branch with `scripts/resolve-tezos-commit.sh` |
 

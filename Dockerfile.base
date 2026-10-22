@@ -1,3 +1,15 @@
+# Build all three Jsonnet tools from the same pinned release.
+FROM debian:trixie-slim AS jsonnet-tools
+SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
+ARG JSONNET_VERSION=0.20.0
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends ca-certificates golang-go && \
+    rm -rf /var/lib/apt/lists/*
+RUN GOBIN=/out CGO_ENABLED=0 go install \
+    github.com/google/go-jsonnet/cmd/jsonnet@v${JSONNET_VERSION} \
+    github.com/google/go-jsonnet/cmd/jsonnetfmt@v${JSONNET_VERSION} \
+    github.com/google/go-jsonnet/cmd/jsonnet-lint@v${JSONNET_VERSION}
+
 FROM debian:trixie-slim AS toolchain
 SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
 
@@ -8,6 +20,7 @@ SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
 ARG NODE_VERSION=18.18.2
 ARG OPAM_VERSION=2.3.0
 ARG FORGE_VERSION=1.5.0
+ARG HADOLINT_VERSION=2.12.0
 
 # ---------------------------------------------------------------------------
 # Layer 1: System packages + kernel cross-compilation tools
@@ -17,12 +30,23 @@ RUN apt-get update && \
       build-essential ca-certificates curl git pkg-config sudo \
       autoconf automake libtool cmake m4 patch perl wget unzip rsync file \
       jq ripgrep less glab xxd \
+      python3 python3-pip python3-venv pre-commit shellcheck shfmt \
       cargo clang musl-tools wabt binutils-gold \
       binutils-riscv64-unknown-elf gcc-riscv64-linux-gnu \
       # opam depexts commonly needed by octez
       libgmp-dev libev-dev libffi-dev libhidapi-dev zlib1g-dev \
       libpq-dev libsqlite3-dev libzstd-dev \
     && rm -rf /var/lib/apt/lists/*
+
+COPY --from=jsonnet-tools /out/ /usr/local/bin/
+RUN case "$(dpkg --print-architecture)" in \
+      amd64) hadolint_arch=x86_64 ;; \
+      arm64) hadolint_arch=arm64 ;; \
+      *) echo 'Unsupported hadolint architecture' >&2; exit 1 ;; \
+    esac && \
+    curl -fsSL "https://github.com/hadolint/hadolint/releases/download/v${HADOLINT_VERSION}/hadolint-Linux-${hadolint_arch}" \
+      -o /usr/local/bin/hadolint && \
+    chmod +x /usr/local/bin/hadolint
 
 # RISC-V cross-compilation symlink
 RUN ln -sf /usr/bin/riscv64-linux-gnu-gcc /usr/bin/riscv64-unknown-linux-musl-gcc
