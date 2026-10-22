@@ -48,7 +48,7 @@ class CheckoutTests(unittest.TestCase):
         instructions = re.split(r'\n(?=[A-Z]+ )', (ROOT / dockerfile).read_text())
         command, = [s[4:] for s in instructions
                     if s.startswith('RUN ') and 'git checkout' in s]
-        command = command.replace('\\\n', '').replace('/root/tezos', shlex.quote(str(destination)))
+        command = command.replace('\\\n', '').replace('/home/dev/tezos', shlex.quote(str(destination)))
         self.env['GIT_COMMIT'] = commit
         return self.run_command('bash', '-euo', 'pipefail', '-c', command, check=check)
 

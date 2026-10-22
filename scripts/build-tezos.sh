@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-cargo_root=/root/tezos/_build/.cargo-target/default
+cargo_root=/home/dev/tezos/_build/.cargo-target/default
 components=(rust-deps rustzcash evm-runtime rollup-node libcrux riscv-kernels kernel-sdk evm-kernel cargo-git cargo-registry)
 cache_dirs=(
   "$cargo_root/rust-deps"
@@ -10,10 +10,10 @@ cache_dirs=(
   "$cargo_root/rollup-node"
   "$cargo_root/libcrux"
   "$cargo_root/riscv-kernels"
-  /root/tezos/src/kernel_sdk/target
-  /root/tezos/etherlink/kernel_latest/target
-  /root/.cargo/git
-  /root/.cargo/registry
+  /home/dev/tezos/src/kernel_sdk/target
+  /home/dev/tezos/etherlink/kernel_latest/target
+  /home/dev/.cargo/git
+  /home/dev/.cargo/registry
 )
 
 # A fresh builder seeds empty mounts from the compiled base, at the same paths
@@ -21,8 +21,8 @@ cache_dirs=(
 for index in "${!components[@]}"; do
   cache=${cache_dirs[$index]}
   case "$cache" in
-    /root/tezos/*) seed="/mnt/base-tezos/${cache#/root/tezos/}" ;;
-    /root/.cargo/*) seed="/mnt/base-cargo/${cache#/root/.cargo/}" ;;
+    /home/dev/tezos/*) seed="/mnt/base-tezos/${cache#/home/dev/tezos/}" ;;
+    /home/dev/.cargo/*) seed="/mnt/base-cargo/${cache#/home/dev/.cargo/}" ;;
   esac
   mkdir -p "$cache"
   if [ -d "$seed" ] && [ -z "$(find "$cache" -mindepth 1 -print -quit)" ]; then
@@ -30,7 +30,7 @@ for index in "${!components[@]}"; do
   fi
 done
 
-cd /root/tezos
+cd /home/dev/tezos
 if [ "${1:-}" = base ]; then
   scripts/slim-mode.sh on
 fi

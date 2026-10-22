@@ -25,6 +25,19 @@ docker build --build-arg GIT_COMMIT="$TEZOS_COMMIT" -t tezos-dev-nightly .
 docker run -it tezos-dev-nightly
 ```
 
+## Development user
+
+Both images default to `dev` (UID/GID 1000), with the checkout at
+`/home/dev/tezos`. Checkout, dependency setup, compilation, and interactive
+repository work run as this user. Toolchains and build caches belong to `dev`.
+Passwordless sudo is available for upstream opam system dependencies and
+additional system packages.
+
+Rebuild the base before the nightly image when upgrading from the old `/root`
+layout. The opam switch and compiled artifacts use absolute paths, so they are
+rebuilt in the new home. BuildKit cache IDs also change to avoid reusing
+root-owned caches. Update any external scripts or mounts using `/root/tezos`.
+
 ## Development tools
 
 The base image includes Python 3, pip, venv support, pre-commit, ShellCheck,
@@ -138,7 +151,7 @@ The two Tezt runners are included in that same Dune invocation through
 ### Build artifacts and image layers
 
 The images retain the compiled Dune `_build` tree, Cargo downloads, sccache,
-and Cargo target directories under `/root/tezos/_build/.cargo-target/default/`:
+and Cargo target directories under `/home/dev/tezos/_build/.cargo-target/default/`:
 
 | Component directory | Used by |
 |---------------------|---------|
@@ -207,6 +220,11 @@ dependency installation.
 | `GIT_COMMIT` | Required | Full Tezos commit SHA to fetch and check out |
 
 ## Validation
+
+`docker run --rm -i IMAGE bash < tests/check-image.sh` verifies the default
+user, writable toolchain and checkout directories, lint tools, and Python venv
+support. It also works with the base Dockerfile's `toolchain` target, which
+can be built without compiling Tezos.
 
 `python3 -m unittest discover -s tests` checks branch resolution and both
 Dockerfiles' checkout commands against a temporary local Git repository. It

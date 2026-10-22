@@ -48,6 +48,15 @@ RUN case "$(dpkg --print-architecture)" in \
       -o /usr/local/bin/hadolint && \
     chmod +x /usr/local/bin/hadolint
 
+# Repository work and per-user toolchains belong to the default developer.
+# Upstream opam depext installation needs sudo for system packages.
+RUN groupadd --gid 1000 dev && \
+    useradd --uid 1000 --gid dev --create-home --shell /bin/bash dev && \
+    echo 'dev ALL=(ALL) NOPASSWD: ALL' > /etc/sudoers.d/dev && \
+    chmod 0440 /etc/sudoers.d/dev && \
+    install -d -o dev -g dev /home/dev/tezos /opt/cargo-export
+ENV HOME=/home/dev
+
 # RISC-V cross-compilation symlink
 RUN ln -sf /usr/bin/riscv64-linux-gnu-gcc /usr/bin/riscv64-unknown-linux-musl-gcc
 
@@ -63,25 +72,28 @@ RUN ARCH="$(dpkg --print-architecture)" && \
     TAG=$(echo "$OPAM_VERSION" | tr '~' '-') && \
     curl -fsSL "https://github.com/ocaml/opam/releases/download/${TAG}/opam-${TAG}-${OPAM_ARCH}" \
       -o /usr/local/bin/opam && \
-    chmod +x /usr/local/bin/opam && \
-    opam init --disable-sandboxing --bare --no-setup
+    chmod +x /usr/local/bin/opam
 
 # ---------------------------------------------------------------------------
 # Layer 3: rustup + sccache (the checkout selects the Rust toolchain below)
 # ---------------------------------------------------------------------------
-ENV RUSTUP_HOME=/root/.rustup \
-    CARGO_HOME=/root/.cargo \
-    PATH="/root/.cargo/bin:${PATH}"
+ENV RUSTUP_HOME=/home/dev/.rustup \
+    CARGO_HOME=/home/dev/.cargo \
+    PATH="/home/dev/.cargo/bin:${PATH}"
 
 ARG SCCACHE_VERSION=0.10.0
-RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
-      sh -s -- -y --default-toolchain none && \
-    curl -fsSL "https://github.com/mozilla/sccache/releases/download/v${SCCACHE_VERSION}/sccache-v${SCCACHE_VERSION}-x86_64-unknown-linux-musl.tar.gz" | \
+RUN curl -fsSL "https://github.com/mozilla/sccache/releases/download/v${SCCACHE_VERSION}/sccache-v${SCCACHE_VERSION}-x86_64-unknown-linux-musl.tar.gz" | \
       tar xz -C /usr/local/bin --strip-components=1 "sccache-v${SCCACHE_VERSION}-x86_64-unknown-linux-musl/sccache" && \
     mv /usr/local/bin/sccache /usr/local/bin/sccache.bin && \
     printf '#!/bin/sh\nexport TMPDIR=/tmp/sccache-tmp\nmkdir -p "$TMPDIR"\nexec sccache.bin "$@"\n' \
       > /usr/local/bin/sccache && \
     chmod +x /usr/local/bin/sccache
+
+USER dev
+WORKDIR /home/dev
+RUN opam init --disable-sandboxing --bare --no-setup
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
+      sh -s -- -y --default-toolchain none
 
 ENV RUSTC_WRAPPER=sccache \
     SCCACHE_CACHE_SIZE=5G
@@ -89,7 +101,7 @@ ENV RUSTC_WRAPPER=sccache \
 # ---------------------------------------------------------------------------
 # Layer 4: nvm + Node.js
 # ---------------------------------------------------------------------------
-ENV NVM_DIR=/root/.nvm
+ENV NVM_DIR=/home/dev/.nvm
 
 RUN curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash && \
     . "$NVM_DIR/nvm.sh" && \
@@ -100,9 +112,9 @@ RUN curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | b
 # Layer 5: Foundry (forge)
 # ---------------------------------------------------------------------------
 RUN curl -L https://foundry.paradigm.xyz | bash && \
-    /root/.foundry/bin/foundryup -i "$FORGE_VERSION"
+    /home/dev/.foundry/bin/foundryup -i "$FORGE_VERSION"
 
-ENV PATH="/root/.foundry/bin:${PATH}"
+ENV PATH="/home/dev/.foundry/bin:${PATH}"
 
 # ---------------------------------------------------------------------------
 # Layer 6: Check out the exact commit resolved before the Docker build
@@ -113,22 +125,22 @@ RUN if [[ ! "${GIT_COMMIT:-}" =~ ^[0-9a-f]{40}$ ]]; then \
       echo 'GIT_COMMIT must be a full commit SHA; use scripts/resolve-tezos-commit.sh' >&2; \
       exit 1; \
     fi && \
-    git init /root/tezos && \
-    cd /root/tezos && \
+    git init /home/dev/tezos && \
+    cd /home/dev/tezos && \
     git remote add origin https://gitlab.com/tezos/tezos.git && \
     git fetch --depth 1 origin "$GIT_COMMIT" && \
     git checkout --detach FETCH_HEAD && \
     test "$(git rev-parse HEAD)" = "$GIT_COMMIT"
 LABEL org.tezos.revision=$GIT_COMMIT
-WORKDIR /root/tezos
+WORKDIR /home/dev/tezos
 
 # Only dependency inputs cross into this stage. COPY uses their content, so a
 # new source commit with unchanged dependencies reuses toolchain/opam layers.
 FROM toolchain AS dependencies
-WORKDIR /root/tezos
-COPY --from=source /root/tezos/scripts/version.sh /root/tezos/scripts/install_build_deps.sh /root/tezos/scripts/install_build_deps.rust.sh ./scripts/
-COPY --from=source /root/tezos/rust-toolchain ./rust-toolchain
-COPY --from=source /root/tezos/opam/virtual/ ./opam/virtual/
+WORKDIR /home/dev/tezos
+COPY --from=source --chown=dev:dev /home/dev/tezos/scripts/version.sh /home/dev/tezos/scripts/install_build_deps.sh /home/dev/tezos/scripts/install_build_deps.rust.sh ./scripts/
+COPY --from=source --chown=dev:dev /home/dev/tezos/rust-toolchain ./rust-toolchain
+COPY --from=source --chown=dev:dev /home/dev/tezos/opam/virtual/ ./opam/virtual/
 COPY scripts/install-opam-deps.sh /usr/local/bin/install-opam-deps
 
 # ---------------------------------------------------------------------------
@@ -161,18 +173,18 @@ ENV PATH=$NVM_DIR/current:${PATH}
 # ---------------------------------------------------------------------------
 # Layer 8-9: OCaml build dependencies (uses BuildKit cache mounts)
 # ---------------------------------------------------------------------------
-RUN --mount=type=cache,target=/root/.opam/download-cache \
+RUN --mount=type=cache,id=tezos-dev-opam-downloads,target=/home/dev/.opam/download-cache,uid=1000,gid=1000 \
     install-opam-deps
 
-ENV OPAM_SWITCH_PREFIX=/root/tezos/_opam \
-    CAML_LD_LIBRARY_PATH=/root/tezos/_opam/lib/stublibs:/root/tezos/_opam/lib/ocaml/stublibs:/root/tezos/_opam/lib/ocaml \
-    OCAML_TOPLEVEL_PATH=/root/tezos/_opam/lib/toplevel \
-    PATH=/root/tezos/_opam/bin:${PATH}
+ENV OPAM_SWITCH_PREFIX=/home/dev/tezos/_opam \
+    CAML_LD_LIBRARY_PATH=/home/dev/tezos/_opam/lib/stublibs:/home/dev/tezos/_opam/lib/ocaml/stublibs:/home/dev/tezos/_opam/lib/ocaml \
+    OCAML_TOPLEVEL_PATH=/home/dev/tezos/_opam/lib/toplevel \
+    PATH=/home/dev/tezos/_opam/bin:${PATH}
 
 # Merge the complete checkout only after installing dependencies. Its _opam
 # switch remains at the same absolute path used when it was created.
 FROM dependencies AS prepared
-COPY --from=source /root/tezos/ /root/tezos/
+COPY --from=source --chown=dev:dev /home/dev/tezos/ /home/dev/tezos/
 ARG GIT_COMMIT
 LABEL org.tezos.revision=$GIT_COMMIT
 
@@ -180,9 +192,10 @@ LABEL org.tezos.revision=$GIT_COMMIT
 # Layer 10: Kernel dependencies
 # ---------------------------------------------------------------------------
 RUN make -f kernels.mk build-deps && \
-    make -f etherlink.mk build-deps
+    make -f etherlink.mk build-deps && \
+    mkdir -p _build/.cargo-target/default
 
-RUN echo '[ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"' >> /root/.bashrc
+RUN echo '[ -s "$NVM_DIR/nvm.sh" ] && . "$NVM_DIR/nvm.sh"' >> /home/dev/.bashrc
 
 # Opt into upstream incremental Rust release builds for the dev profile.
 # Inherited by the nightly image and interactive development containers.
@@ -192,58 +205,58 @@ ENV OCTEZ_RUST_INCREMENTAL=1
 # layers import each artifact group separately, including on a fresh builder.
 FROM prepared AS build
 COPY scripts/build-tezos.sh /usr/local/bin/build-tezos
-RUN --mount=type=cache,id=tezos-cargo-rust-deps,target=/root/tezos/_build/.cargo-target/default/rust-deps,sharing=locked \
-    --mount=type=cache,id=tezos-cargo-rustzcash,target=/root/tezos/_build/.cargo-target/default/rustzcash,sharing=locked \
-    --mount=type=cache,id=tezos-cargo-evm-runtime,target=/root/tezos/_build/.cargo-target/default/evm-runtime,sharing=locked \
-    --mount=type=cache,id=tezos-cargo-rollup-node,target=/root/tezos/_build/.cargo-target/default/rollup-node,sharing=locked \
-    --mount=type=cache,id=tezos-cargo-libcrux,target=/root/tezos/_build/.cargo-target/default/libcrux,sharing=locked \
-    --mount=type=cache,id=tezos-cargo-riscv-kernels,target=/root/tezos/_build/.cargo-target/default/riscv-kernels,sharing=locked \
-    --mount=type=cache,id=tezos-cargo-kernel-sdk,target=/root/tezos/src/kernel_sdk/target,sharing=locked \
-    --mount=type=cache,id=tezos-cargo-evm-kernel,target=/root/tezos/etherlink/kernel_latest/target,sharing=locked \
-    --mount=type=cache,id=tezos-cargo-git,target=/root/.cargo/git,sharing=locked \
-    --mount=type=cache,id=tezos-cargo-registry,target=/root/.cargo/registry,sharing=locked \
-    --mount=type=bind,from=prepared,source=/root/.cargo,target=/mnt/base-cargo \
-    --mount=type=bind,from=prepared,source=/root/tezos,target=/mnt/base-tezos \
+RUN --mount=type=cache,id=tezos-dev-cargo-rust-deps,target=/home/dev/tezos/_build/.cargo-target/default/rust-deps,sharing=locked,uid=1000,gid=1000 \
+    --mount=type=cache,id=tezos-dev-cargo-rustzcash,target=/home/dev/tezos/_build/.cargo-target/default/rustzcash,sharing=locked,uid=1000,gid=1000 \
+    --mount=type=cache,id=tezos-dev-cargo-evm-runtime,target=/home/dev/tezos/_build/.cargo-target/default/evm-runtime,sharing=locked,uid=1000,gid=1000 \
+    --mount=type=cache,id=tezos-dev-cargo-rollup-node,target=/home/dev/tezos/_build/.cargo-target/default/rollup-node,sharing=locked,uid=1000,gid=1000 \
+    --mount=type=cache,id=tezos-dev-cargo-libcrux,target=/home/dev/tezos/_build/.cargo-target/default/libcrux,sharing=locked,uid=1000,gid=1000 \
+    --mount=type=cache,id=tezos-dev-cargo-riscv-kernels,target=/home/dev/tezos/_build/.cargo-target/default/riscv-kernels,sharing=locked,uid=1000,gid=1000 \
+    --mount=type=cache,id=tezos-dev-cargo-kernel-sdk,target=/home/dev/tezos/src/kernel_sdk/target,sharing=locked,uid=1000,gid=1000 \
+    --mount=type=cache,id=tezos-dev-cargo-evm-kernel,target=/home/dev/tezos/etherlink/kernel_latest/target,sharing=locked,uid=1000,gid=1000 \
+    --mount=type=cache,id=tezos-dev-cargo-git,target=/home/dev/.cargo/git,sharing=locked,uid=1000,gid=1000 \
+    --mount=type=cache,id=tezos-dev-cargo-registry,target=/home/dev/.cargo/registry,sharing=locked,uid=1000,gid=1000 \
+    --mount=type=bind,from=prepared,source=/home/dev/.cargo,target=/mnt/base-cargo \
+    --mount=type=bind,from=prepared,source=/home/dev/tezos,target=/mnt/base-tezos \
     build-tezos base
 
 FROM prepared AS development
 # Keep tools downloaded by the build (for example solc) as well as shell setup.
-RUN --mount=type=bind,from=build,source=/root,target=/mnt/build-root \
-    rsync -aH --checksum --delete --exclude=/tezos --exclude=/.cargo/git --exclude=/.cargo/registry /mnt/build-root/ /root/
-RUN --mount=type=bind,from=build,source=/root/tezos,target=/mnt/build-tezos \
+RUN --mount=type=bind,from=build,source=/home/dev,target=/mnt/build-home \
+    rsync -aH --checksum --delete --exclude=/tezos --exclude=/.cargo/git --exclude=/.cargo/registry /mnt/build-home/ /home/dev/
+RUN --mount=type=bind,from=build,source=/home/dev/tezos,target=/mnt/build-tezos \
     rsync -aH --checksum --delete --exclude=/_opam --exclude=/_build/.cargo-target \
       --exclude=/src/kernel_sdk/target --exclude=/etherlink/kernel_latest/target \
-      /mnt/build-tezos/ /root/tezos/
+      /mnt/build-tezos/ /home/dev/tezos/
 RUN --mount=type=bind,from=build,source=/opt/cargo-export/rust-deps,target=/mnt/build-cargo \
-    mkdir -p /root/tezos/_build/.cargo-target/default/rust-deps && \
-    rsync -aH --checksum --delete /mnt/build-cargo/ /root/tezos/_build/.cargo-target/default/rust-deps/
+    mkdir -p /home/dev/tezos/_build/.cargo-target/default/rust-deps && \
+    rsync -aH --checksum --delete /mnt/build-cargo/ /home/dev/tezos/_build/.cargo-target/default/rust-deps/
 RUN --mount=type=bind,from=build,source=/opt/cargo-export/rustzcash,target=/mnt/build-cargo \
-    mkdir -p /root/tezos/_build/.cargo-target/default/rustzcash && \
-    rsync -aH --checksum --delete /mnt/build-cargo/ /root/tezos/_build/.cargo-target/default/rustzcash/
+    mkdir -p /home/dev/tezos/_build/.cargo-target/default/rustzcash && \
+    rsync -aH --checksum --delete /mnt/build-cargo/ /home/dev/tezos/_build/.cargo-target/default/rustzcash/
 RUN --mount=type=bind,from=build,source=/opt/cargo-export/evm-runtime,target=/mnt/build-cargo \
-    mkdir -p /root/tezos/_build/.cargo-target/default/evm-runtime && \
-    rsync -aH --checksum --delete /mnt/build-cargo/ /root/tezos/_build/.cargo-target/default/evm-runtime/
+    mkdir -p /home/dev/tezos/_build/.cargo-target/default/evm-runtime && \
+    rsync -aH --checksum --delete /mnt/build-cargo/ /home/dev/tezos/_build/.cargo-target/default/evm-runtime/
 RUN --mount=type=bind,from=build,source=/opt/cargo-export/rollup-node,target=/mnt/build-cargo \
-    mkdir -p /root/tezos/_build/.cargo-target/default/rollup-node && \
-    rsync -aH --checksum --delete /mnt/build-cargo/ /root/tezos/_build/.cargo-target/default/rollup-node/
+    mkdir -p /home/dev/tezos/_build/.cargo-target/default/rollup-node && \
+    rsync -aH --checksum --delete /mnt/build-cargo/ /home/dev/tezos/_build/.cargo-target/default/rollup-node/
 RUN --mount=type=bind,from=build,source=/opt/cargo-export/libcrux,target=/mnt/build-cargo \
-    mkdir -p /root/tezos/_build/.cargo-target/default/libcrux && \
-    rsync -aH --checksum --delete /mnt/build-cargo/ /root/tezos/_build/.cargo-target/default/libcrux/
+    mkdir -p /home/dev/tezos/_build/.cargo-target/default/libcrux && \
+    rsync -aH --checksum --delete /mnt/build-cargo/ /home/dev/tezos/_build/.cargo-target/default/libcrux/
 RUN --mount=type=bind,from=build,source=/opt/cargo-export/riscv-kernels,target=/mnt/build-cargo \
-    mkdir -p /root/tezos/_build/.cargo-target/default/riscv-kernels && \
-    rsync -aH --checksum --delete /mnt/build-cargo/ /root/tezos/_build/.cargo-target/default/riscv-kernels/
+    mkdir -p /home/dev/tezos/_build/.cargo-target/default/riscv-kernels && \
+    rsync -aH --checksum --delete /mnt/build-cargo/ /home/dev/tezos/_build/.cargo-target/default/riscv-kernels/
 RUN --mount=type=bind,from=build,source=/opt/cargo-export/kernel-sdk,target=/mnt/build-cargo \
-    mkdir -p /root/tezos/src/kernel_sdk/target && \
-    rsync -aH --checksum --delete /mnt/build-cargo/ /root/tezos/src/kernel_sdk/target/
+    mkdir -p /home/dev/tezos/src/kernel_sdk/target && \
+    rsync -aH --checksum --delete /mnt/build-cargo/ /home/dev/tezos/src/kernel_sdk/target/
 RUN --mount=type=bind,from=build,source=/opt/cargo-export/evm-kernel,target=/mnt/build-cargo \
-    mkdir -p /root/tezos/etherlink/kernel_latest/target && \
-    rsync -aH --checksum --delete /mnt/build-cargo/ /root/tezos/etherlink/kernel_latest/target/
+    mkdir -p /home/dev/tezos/etherlink/kernel_latest/target && \
+    rsync -aH --checksum --delete /mnt/build-cargo/ /home/dev/tezos/etherlink/kernel_latest/target/
 RUN --mount=type=bind,from=build,source=/opt/cargo-export/cargo-git,target=/mnt/build-cargo \
-    mkdir -p /root/.cargo/git && \
-    rsync -aH --checksum --delete /mnt/build-cargo/ /root/.cargo/git/
+    mkdir -p /home/dev/.cargo/git && \
+    rsync -aH --checksum --delete /mnt/build-cargo/ /home/dev/.cargo/git/
 RUN --mount=type=bind,from=build,source=/opt/cargo-export/cargo-registry,target=/mnt/build-cargo \
-    mkdir -p /root/.cargo/registry && \
-    rsync -aH --checksum --delete /mnt/build-cargo/ /root/.cargo/registry/
+    mkdir -p /home/dev/.cargo/registry && \
+    rsync -aH --checksum --delete /mnt/build-cargo/ /home/dev/.cargo/registry/
 
-WORKDIR /root/tezos
+WORKDIR /home/dev/tezos
 CMD ["/bin/bash"]
