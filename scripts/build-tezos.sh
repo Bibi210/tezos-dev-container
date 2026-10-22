@@ -43,10 +43,14 @@ make BUILD_EXTRA='tezt/tests/main.exe etherlink/tezt/tests/main.exe'
 for binary in _build/install/default/bin/*; do
   name=${binary##*/}
   if [ -f "$name" ] && [ ! -L "$name" ] && cmp -s "$name" "$binary"; then
+    # Dune's copied executables can be read-only. Replace the directory entry
+    # instead of truncating it, also preserving any hard-linked build artifact.
+    launcher=$(mktemp "./.${name}.XXXXXX")
     # Expand the launcher's arguments at execution time.
     # shellcheck disable=SC2016
-    printf '#!/bin/sh\nexec "$(dirname -- "$0")/%s" "$@"\n' "$binary" > "$name"
-    chmod +x "$name"
+    printf '#!/bin/sh\nexec "$(dirname -- "$0")/%s" "$@"\n' "$binary" > "$launcher"
+    chmod 755 "$launcher"
+    mv -f -- "$launcher" "$name"
   fi
 done
 
